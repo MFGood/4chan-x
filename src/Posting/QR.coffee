@@ -295,35 +295,36 @@ QR =
     postRange.selectNode root
     text = if post.board.ID is g.BOARD.ID then ">>#{post}\n" else ">>>/#{post.board}/#{post}\n"
     for i in [0...sel.rangeCount]
-      range = sel.getRangeAt i
-      # Trim range to be fully inside post
-      if range.compareBoundaryPoints(Range.START_TO_START, postRange) < 0
-        range.setStartBefore root
-      if range.compareBoundaryPoints(Range.END_TO_END, postRange) > 0
-        range.setEndAfter root
+      try
+        range = sel.getRangeAt i
+        # Trim range to be fully inside post
+        if range.compareBoundaryPoints(Range.START_TO_START, postRange) < 0
+          range.setStartBefore root
+        if range.compareBoundaryPoints(Range.END_TO_END, postRange) > 0
+          range.setEndAfter root
 
-      continue unless range.toString().trim()
+        continue unless range.toString().trim()
 
-      frag  = range.cloneContents()
-      ancestor = range.commonAncestorContainer
-      # Quoting the insides of a spoiler/code tag.
-      if $.x 'ancestor-or-self::*[self::s or contains(@class,"removed-spoiler")]', ancestor
-        $.prepend frag, $.tn '[spoiler]'
-        $.add     frag, $.tn '[/spoiler]'
-      if insideCode = $.x 'ancestor-or-self::pre[contains(@class,"prettyprint")]', ancestor
-        $.prepend frag, $.tn '[code]'
-        $.add     frag, $.tn '[/code]'
-      for node in $$ (if insideCode then 'br' else '.prettyprint br'), frag
-        $.replace node, $.tn '\n'
-      for node in $$ 'br', frag
-        $.replace node, $.tn '\n>' unless node is frag.lastChild
-      g.SITE.insertTags?(frag)
-      for node in $$ '.linkify[data-original]', frag
-        $.replace node, $.tn node.dataset.original
-      for node in $$ '.embedder', frag
-        $.rm node.previousSibling if node.previousSibling?.nodeValue is ' '
-        $.rm node
-      text += ">#{frag.textContent.trim()}\n"
+        frag  = range.cloneContents()
+        ancestor = range.commonAncestorContainer
+        # Quoting the insides of a spoiler/code tag.
+        if $.x 'ancestor-or-self::*[self::s or contains(@class,"removed-spoiler")]', ancestor
+          $.prepend frag, $.tn '[spoiler]'
+          $.add     frag, $.tn '[/spoiler]'
+        if insideCode = $.x 'ancestor-or-self::pre[contains(@class,"prettyprint")]', ancestor
+          $.prepend frag, $.tn '[code]'
+          $.add     frag, $.tn '[/code]'
+        for node in $$ (if insideCode then 'br' else '.prettyprint br'), frag
+          $.replace node, $.tn '\n'
+        for node in $$ 'br', frag
+          $.replace node, $.tn '\n>' unless node is frag.lastChild
+        g.SITE.insertTags?(frag)
+        for node in $$ '.linkify[data-original]', frag
+          $.replace node, $.tn node.dataset.original
+        for node in $$ '.embedder', frag
+          $.rm node.previousSibling if node.previousSibling?.nodeValue is ' '
+          $.rm node
+        text += ">#{frag.textContent.trim()}\n"
 
     QR.openPost()
     {com, thread} = QR.nodes
@@ -351,6 +352,30 @@ QR =
     counter.textContent = count
     counter.hidden      = count < QR.max_comment/2
     (if count > QR.max_comment then $.addClass else $.rmClass) counter, 'warning'
+
+    splitPost = QR.nodes.splitPost
+    splitPost.hidden = count < QR.max_comment
+
+  splitPost: ->
+    count = QR.nodes.com.value.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, '_').length
+    text = QR.nodes.com.value
+    return if count < QR.max_comment or QR.selected.isLocked
+    lastPostLength = 0
+    QR.selected.setComment("");
+
+    for line in text.split("\n")
+      currentLength = line.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, '_').length + 1 # 1 for newline
+      if (currentLength + lastPostLength) > QR.max_comment
+        post = new QR.post true
+        post.setComment(line)
+        lastPostLength = currentLength
+      else
+        currentPost = QR.selected
+        newComment = [currentPost.com, line].filter((el) -> el != null).join("\n")
+        currentPost.setComment(newComment)
+        lastPostLength += currentLength
+
+    QR.nodes.el.classList.add 'dump'
 
   getFile: ->
     $.event 'QRFile', QR.selected?.file
@@ -513,6 +538,7 @@ QR =
     setNode 'sub',            '[data-name=sub]'
     setNode 'com',            '[data-name=com]'
     setNode 'charCount',      '#char-count'
+    setNode 'splitPost',      '#split-post'
     setNode 'texPreview',     '#tex-preview'
     setNode 'dumpList',       '#dump-list'
     setNode 'addPost',        '#add-post'
@@ -557,6 +583,7 @@ QR =
     $.on nodes.sjisToggle,     'click',     QR.toggleSJIS
     $.on nodes.texButton,      'mousedown', QR.texPreviewShow
     $.on nodes.texButton,      'mouseup',   QR.texPreviewHide
+    $.on nodes.splitPost,      'click',     QR.splitPost
     $.on nodes.addPost,        'click',     -> new QR.post true
     $.on nodes.drawButton,     'click',     QR.oekaki.draw
     $.on nodes.fileButton,     'click',     QR.openFileInput
@@ -706,6 +733,9 @@ QR =
     post.lock()
 
     formData =
+      MAX_FILE_SIZE: QR.max_size
+      mode:     'regist'
+      pwd:      QR.persona.getPassword()
       resto:    threadID
       name:     post.name unless QR.forcedAnon
       email:    post.email
@@ -715,8 +745,6 @@ QR =
       filetag:  filetag
       spoiler:  post.spoiler
       flag:     post.flag
-      mode:     'regist'
-      pwd:      QR.persona.getPassword()
 
     options =
       responseType: 'document'
